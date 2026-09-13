@@ -1,0 +1,53 @@
+# --- Python bytecode ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual environments ---
+# Never commit a venv: it is large, machine-specific, and rebuildable
+# from pyproject.toml.
+.venv/
+venv/
+env/
+
+# --- Packaging / build output ---
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Tool caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Coverage ---
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- Secrets and local configuration ---
+# Real credentials must never enter git. Commit a .env.example instead.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Test artifacts (screenshots, traces, reports) ---
+# Produced by test runs; regenerated every time, never source.
+/artifacts/
+/reports/
+/screenshots/
+*.log
+
+# --- Editors ---
+.idea/
+.vscode/
+*.swp
+
+# --- OS ---
+Thumbs.db
+desktop.ini
+.DS_Store
