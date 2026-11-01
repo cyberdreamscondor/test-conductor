@@ -34,6 +34,9 @@ authors = [{ name = "David" }]
 #   psycopg    - database layer (Phase 4)
 dependencies = [
     "pywinauto>=0.6.9",
+    # PyYAML parses the per-test config files. YAML rather than JSON because it
+    # takes comments, and a config a human edits needs to explain itself.
+    "pyyaml>=6.0",
 ]
 
 # Optional dependency groups. Installed explicitly, e.g. pip install -e ".[dev]"
@@ -64,6 +67,8 @@ only-include = [
     "chrome_window.py",
     "chrome_menu.py",
     "chrome.py",
+    "chrome_checks.py",
+    "yaml_config.py",
 ]
 
 # --- pytest -------------------------------------------------------------------

@@ -14,8 +14,34 @@ Measured facts that this module is built on:
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from chrome_window import UIA_TRANSIENT_ERRORS, ChromeWindow
 from waiting import wait_until
+
+
+class MenuItem(StrEnum):
+    """Entries of Chrome's application menu, by logical name."""
+
+    NEW_TAB = "New tab"
+    NEW_WINDOW = "New window"
+    NEW_INCOGNITO_WINDOW = "New Incognito window"
+    PASSWORDS_AND_AUTOFILL = "Passwords and autofill"
+    HISTORY = "History"
+    DOWNLOADS = "Downloads"
+    BOOKMARKS_AND_LISTS = "Bookmarks and lists"
+    TAB_GROUPS = "Tab groups"
+    EXTENSIONS = "Extensions"
+    DELETE_BROWSING_DATA = "Delete browsing data"
+    ZOOM = "Zoom"
+    FULL_SCREEN = "Full screen"
+    PRINT = "Print"
+    FIND_AND_EDIT = "Find and edit"
+    CAST_SAVE_AND_SHARE = "Cast, save, and share"
+    MORE_TOOLS = "More tools"
+    HELP = "Help"
+    SETTINGS = "Settings"
+    EXIT = "Exit"
 
 
 def _matches(item_name: str, label: str) -> bool:
