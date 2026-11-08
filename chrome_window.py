@@ -1,17 +1,7 @@
-"""Chrome's native window: the frame, the toolbar, the tab strip.
-
-This is the UI Automation half of the framework. It reads Chrome as a Windows
-application through the accessibility tree that screen readers use.
-
-What it can see: the window frame, toolbar buttons, the omnibox, the tab strip,
-menus. What it CANNOT see: anything inside a tab. A whole web page collapses to
-a single opaque node - measured, a fresh window exposes 39 elements in total.
-Reading page content needs the DevTools protocol instead.
-
-Windows-only by nature: UI Automation is a Windows API.
-"""
-
 from __future__ import annotations
+
+import logging
+from typing import Any, TypeAlias
 
 from comtypes import COMError
 from pywinauto import Desktop
@@ -19,27 +9,18 @@ from pywinauto.findwindows import ElementAmbiguousError, ElementNotFoundError
 
 from waiting import wait_until
 
-# Exceptions that mean "the tree is still settling", not "something is wrong".
-# The accessibility tree is built lazily and elements can disappear between
-# being listed and being read, so these are retried rather than raised.
+logger = logging.getLogger(__name__)
+
 UIA_TRANSIENT_ERRORS = (ElementNotFoundError, ElementAmbiguousError, COMError)
 
-# The Chromium window class. NOT a way to identify Chrome: VS Code, Docker
-# Desktop, Slack and every other Electron application use it too. Only ever
-# used together with a process id.
 CHROMIUM_WINDOW_CLASS = "Chrome_WidgetWin_1"
 
-# The three-dot menu button. Matched by class name because that is the most
-# stable of the three identifiers UIA offers:
-#   class_name    'BrowserAppMenuButton'  semantic, not translated  <- use this
-#   automation_id 'view_1007'             a bare sequence number, may shift
-#   name          'Chrome'                translated into the UI language
-# Note the name is 'Chrome' in current versions, not the
-# 'Customize and control Google Chrome' that older documentation still cites.
 APP_MENU_BUTTON_CLASS = "BrowserAppMenuButton"
 
+UIAElement: TypeAlias = Any
 
-def _candidate_windows(process_id: int) -> list:
+
+def _candidate_windows(process_id: int) -> list[UIAElement]:
     """Top-level Chrome windows belonging to one process."""
     found = []
     for window in Desktop(backend="uia").windows():
@@ -50,30 +31,32 @@ def _candidate_windows(process_id: int) -> list:
             if info.class_name != CHROMIUM_WINDOW_CLASS:
                 continue
             if not info.name:
-                continue  # unnamed windows are tooltips and popups, not the frame
+                continue
             found.append(window)
         except UIA_TRANSIENT_ERRORS:
-            continue  # element vanished mid-enumeration; simply skip it
+            continue
     return found
 
 
-class ChromeWindow:
-    """One Chrome browser window, seen through UI Automation."""
+def _window_area(window: UIAElement) -> int:
+    """Screen area of a window, used to pick the frame from its popups."""
+    rectangle = window.rectangle()
+    return rectangle.width() * rectangle.height()
 
-    def __init__(self, element):
+
+class ChromeWindow:
+    def __init__(self, element: UIAElement) -> None:
         self._element = element
 
     @classmethod
     def attach(cls, process_id: int, timeout: float) -> ChromeWindow:
         """Wait for the browser window of ``process_id`` and wrap it."""
 
-        def largest_window():
+        def largest_window() -> UIAElement | None:
             windows = _candidate_windows(process_id)
             if not windows:
                 return None
-            # A process can own several windows. The browser frame is the big
-            # one; the others are popups and tooltips.
-            return max(windows, key=lambda w: w.rectangle().width() * w.rectangle().height())
+            return max(windows, key=_window_area)
 
         element = wait_until(
             largest_window,
@@ -81,10 +64,11 @@ class ChromeWindow:
             description=f"the Chrome window of process {process_id}",
             ignore=UIA_TRANSIENT_ERRORS,
         )
+        logger.info("window attached: pid=%s title=%r", process_id, element.element_info.name)
         return cls(element)
 
     @property
-    def element(self):
+    def element(self) -> UIAElement:
         """The underlying pywinauto wrapper."""
         return self._element
 
@@ -95,12 +79,14 @@ class ChromeWindow:
 
     def focus(self) -> None:
         """Bring this window to the front, as mouse interaction requires."""
+        logger.debug("focusing window %r", self.title)
         self._element.set_focus()
 
-    def button(self, class_name: str, timeout: float):
+    def button(self, class_name: str, timeout: float) -> UIAElement:
         """Find a toolbar button by its UIA class name, waiting for it."""
+        logger.debug("looking for a Button with class %r", class_name)
 
-        def matching_button():
+        def matching_button() -> UIAElement | None:
             for candidate in self._element.descendants(control_type="Button"):
                 try:
                     if candidate.element_info.class_name == class_name:
@@ -116,6 +102,6 @@ class ChromeWindow:
             ignore=UIA_TRANSIENT_ERRORS,
         )
 
-    def app_menu_button(self, timeout: float):
+    def app_menu_button(self, timeout: float) -> UIAElement:
         """The three-dot button that opens Chrome's application menu."""
         return self.button(APP_MENU_BUTTON_CLASS, timeout=timeout)

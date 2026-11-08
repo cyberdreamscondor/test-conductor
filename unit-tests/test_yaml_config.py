@@ -1,12 +1,8 @@
-"""Unit tests for per-test YAML configuration.
-
-Pure and fast: no Chrome. Config files are written into tmp_path, so these
-tests pass on a machine with no browser and no suite repository.
-"""
-
 import pytest
 
 from yaml_config import (
+    ConfigNode,
+    MissingConfigAttribute,
     MissingConfigValue,
     TestConfig,
     config_path_for,
@@ -29,9 +25,6 @@ def write_config(configs_root, relative, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
-
-
-# --- path mapping ------------------------------------------------------------
 
 
 def test_config_path_mirrors_the_test_path(suite):
@@ -61,9 +54,6 @@ def test_test_file_outside_the_tests_root_is_rejected(suite):
         config_path_for(tests_root.parent / "stray.py", tests_root, configs_root)
 
     assert "not inside the tests root" in str(failure.value)
-
-
-# --- loading -----------------------------------------------------------------
 
 
 def test_values_are_read_from_the_file(suite):
@@ -116,9 +106,6 @@ def test_an_empty_file_is_treated_as_empty_config(suite):
     assert config.get("chrome", {}) == {}
 
 
-# --- strictness --------------------------------------------------------------
-
-
 def test_missing_value_fails_and_names_its_source(suite):
     """Returning None would let a test assert against nothing and pass."""
     tests_root, configs_root = suite
@@ -159,14 +146,14 @@ def test_a_non_mapping_top_level_is_rejected(suite):
 
 
 def test_a_non_mapping_section_is_rejected(suite):
-    """Same protection one level down."""
+    """A section is splatted into Chrome.launch, so a string must fail here."""
     tests_root, configs_root = suite
-    write_config(configs_root, "menus/test_thing.yaml", "expected: just a string\n")
+    write_config(configs_root, "menus/test_thing.yaml", "chrome: just a string\n")
 
     config = load_test_config(tests_root / "menus" / "test_thing.py", tests_root, configs_root)
 
     with pytest.raises(MissingConfigValue) as failure:
-        config.expected  # noqa: B018 - accessing the property is the action
+        config.section("chrome")
 
     assert "must be a mapping" in str(failure.value)
 
@@ -190,3 +177,116 @@ def test_config_without_a_file_reports_the_path_it_wanted():
 
     assert not config.exists
     assert "test_x.yaml" in str(config.path)
+
+
+def test_values_are_reachable_with_dots(suite):
+    """Subscript chains are plumbing; a test should read as a statement."""
+    tests_root, configs_root = suite
+    write_config(configs_root, "menus/test_thing.yaml", "asserts:\n  menu_item: Settings\n")
+
+    config = load_test_config(tests_root / "menus" / "test_thing.py", tests_root, configs_root)
+
+    assert config.asserts.menu_item == "Settings"
+
+
+def test_dots_work_at_any_depth(suite):
+    """Dots must keep working however deep the config grows."""
+    tests_root, configs_root = suite
+    write_config(
+        configs_root,
+        "menus/test_thing.yaml",
+        "asserts:\n  menu:\n    first:\n      label: New tab\n",
+    )
+
+    config = load_test_config(tests_root / "menus" / "test_thing.py", tests_root, configs_root)
+
+    assert config.asserts.menu.first.label == "New tab"
+
+
+def test_mappings_inside_lists_are_wrapped(suite):
+    """One test body over a list of scenario mappings."""
+    tests_root, configs_root = suite
+    write_config(
+        configs_root,
+        "menus/test_thing.yaml",
+        "scenarios:\n  - name: single\n    quantity: 1\n  - name: bulk\n    quantity: 3\n",
+    )
+
+    config = load_test_config(tests_root / "menus" / "test_thing.py", tests_root, configs_root)
+    scenarios = config.scenarios
+
+    assert scenarios[0].name == "single"
+    assert scenarios[1].quantity == 3
+
+
+def test_missing_attribute_names_the_file_the_path_and_the_alternatives(suite):
+    """A bare AttributeError would not say which config file is wrong."""
+    tests_root, configs_root = suite
+    write_config(
+        configs_root,
+        "menus/test_thing.yaml",
+        "asserts:\n  menu_item: Settings\n  menu_is_open: true\n",
+    )
+
+    config = load_test_config(tests_root / "menus" / "test_thing.py", tests_root, configs_root)
+
+    with pytest.raises(MissingConfigValue) as failure:
+        config.asserts.typo_key  # noqa: B018 - the access IS the action
+
+    message = str(failure.value)
+    assert "typo_key" in message
+    assert "test_thing.yaml" in message, "must name the file"
+    assert "asserts" in message, "must name the dotted path, not just the key"
+    assert "menu_item" in message, "must list what IS available"
+
+
+def test_missing_attribute_is_both_a_lookup_and_an_attribute_error(suite):
+    """Both, so that `except MissingConfigValue` and hasattr each still work."""
+    node = ConfigNode({"present": 1}, __import__("pathlib").Path("x.yaml"))
+
+    with pytest.raises(MissingConfigAttribute):
+        node.absent  # noqa: B018 - the access IS the action
+
+    assert issubclass(MissingConfigAttribute, MissingConfigValue)
+    assert issubclass(MissingConfigAttribute, AttributeError)
+    assert not hasattr(node, "absent"), "hasattr must return False, not raise"
+    assert getattr(node, "absent", "fallback") == "fallback"
+
+
+def test_underscored_names_are_never_config_lookups(suite):
+    """A dunder probe must not become a config lookup, or __init__ recurses."""
+    node = ConfigNode({"present": 1}, __import__("pathlib").Path("x.yaml"))
+
+    with pytest.raises(AttributeError):
+        node._not_a_config_key  # noqa: B018 - the access IS the action
+
+
+def test_an_absent_section_is_empty_rather_than_an_error(suite):
+    """This is what lets a test omit a section and still launch on defaults."""
+    tests_root, configs_root = suite
+    write_config(configs_root, "menus/test_thing.yaml", "asserts:\n  menu_item: Settings\n")
+
+    config = load_test_config(tests_root / "menus" / "test_thing.py", tests_root, configs_root)
+
+    assert dict(config.chrome) == {}
+
+
+def test_a_value_from_an_absent_section_still_fails_and_names_the_file(suite):
+    """Empty is fine, but reading a value out of nothing is still an error."""
+    tests_root, configs_root = suite
+    write_config(configs_root, "menus/test_thing.yaml", "asserts:\n  menu_item: Settings\n")
+
+    config = load_test_config(tests_root / "menus" / "test_thing.py", tests_root, configs_root)
+
+    with pytest.raises(MissingConfigValue) as failure:
+        config.chrome.ui_timeout  # noqa: B018 - the access IS the action
+
+    assert "test_thing.yaml" in str(failure.value)
+
+
+def test_a_key_shadowed_by_a_mapping_method_is_still_reachable(suite):
+    """A key named like a Mapping method is shadowed; subscript it instead."""
+    node = ConfigNode({"items": [1, 2]}, __import__("pathlib").Path("x.yaml"))
+
+    assert callable(node.items), "the Mapping method wins, as Python requires"
+    assert node["items"] == [1, 2], "the subscript is the way to that key"

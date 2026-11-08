@@ -1,14 +1,3 @@
-"""Unit tests for the high-level checks.
-
-No Chrome: the checks only read a small surface (is_running, title,
-profile_directory, is_open, item_names, has_item), so stubs stand in for the
-real objects. That means these tests also pin down that surface - if a check
-starts reaching for something else, it will not work against a stub.
-
-Most of these assert on the FAILURE MESSAGE. That is the whole reason the
-checks exist, so it is the thing worth protecting.
-"""
-
 from pathlib import Path
 
 import pytest
@@ -26,8 +15,6 @@ from chrome_menu import MenuItem, _matches
 
 
 class FakeMenu:
-    """Stands in for AppMenu. Mirrors the real matching rules."""
-
     def __init__(self, names):
         self._names = list(names)
 
@@ -47,9 +34,6 @@ class FakeChrome:
         self.is_running = running
         self.title = title
         self.profile_directory = profile or Path("/tmp/test-conductor-chrome-abc")
-
-
-# --- browser ------------------------------------------------------------------
 
 
 def test_running_browser_passes():
@@ -88,9 +72,6 @@ def test_profile_isolation_rejects_a_missing_directory():
         check_profile_isolated(FakeChrome(profile=Path("/no/such/dir")), "test-conductor")
 
     assert "does not exist" in str(failure.value)
-
-
-# --- menu ---------------------------------------------------------------------
 
 
 def test_open_menu_passes():

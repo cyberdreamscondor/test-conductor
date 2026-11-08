@@ -1,14 +1,3 @@
-"""Unit tests for Chrome discovery and launch-argument construction.
-
-No Chrome is launched here and none needs to be installed: a fake executable is
-a file created by tmp_path. That is deliberate - these tests must pass on a
-Linux CI runner with no browser at all.
-
-`monkeypatch` and `tmp_path` are pytest's built-in fixtures. monkeypatch undoes
-every change it makes when the test ends, so an environment variable set in one
-test cannot leak into another.
-"""
-
 import pytest
 
 from chrome_config import (
@@ -26,9 +15,6 @@ def fake_chrome(tmp_path):
     executable = tmp_path / "chrome.exe"
     executable.write_text("not really chrome")
     return executable
-
-
-# --- discovery ---------------------------------------------------------------
 
 
 def test_explicit_path_wins(fake_chrome, monkeypatch):
@@ -67,7 +53,6 @@ def test_missing_environment_path_fails_loudly(tmp_path, monkeypatch):
 def test_failure_message_lists_what_was_searched(monkeypatch):
     """'Chrome not found' is unactionable without the locations tried."""
     monkeypatch.delenv(CHROME_PATH_ENV_VAR, raising=False)
-    # Force every discovery route to fail, including the registry on Windows.
     monkeypatch.setattr("chrome_config._registry_chrome_path", lambda: None)
     monkeypatch.setattr("chrome_config._WINDOWS_CANDIDATES", (r"{ProgramFiles}\nowhere.exe",))
 
@@ -78,9 +63,6 @@ def test_failure_message_lists_what_was_searched(monkeypatch):
     assert "Searched:" in message
     assert "nowhere.exe" in message
     assert CHROME_PATH_ENV_VAR in message, "the message should say how to fix it"
-
-
-# --- launch arguments --------------------------------------------------------
 
 
 def test_command_line_always_isolates_the_profile(fake_chrome, tmp_path):
@@ -134,15 +116,12 @@ def test_extra_flags_are_appended(fake_chrome, tmp_path):
     assert arguments.index("--lang=de") < len(arguments) - 1, "the URL must still be last"
 
 
-# --- immutability ------------------------------------------------------------
-
-
 def test_config_cannot_be_mutated(fake_chrome):
     """A config a test can mutate mid-run cannot be reasoned about."""
     config = ChromeConfig(executable=fake_chrome)
 
     with pytest.raises(Exception):  # noqa: B017 - dataclasses raise FrozenInstanceError
-        config.ui_timeout = 999
+        config.ui_timeout = 999  # ty: ignore[invalid-assignment]
 
 
 def test_with_changes_returns_a_new_config(fake_chrome):

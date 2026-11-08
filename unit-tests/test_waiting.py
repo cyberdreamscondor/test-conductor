@@ -1,12 +1,3 @@
-"""Unit tests for the waiting primitive.
-
-These are tests of the *framework*, not of any application. They are pure and
-fast - no Chrome, no network - so they can run on every save.
-
-Each test states what it protects against, because a test whose purpose is not
-obvious gets deleted by the next person who sees it fail.
-"""
-
 import time
 
 import pytest

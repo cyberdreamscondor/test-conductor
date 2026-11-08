@@ -1,28 +1,20 @@
-"""Chrome's native application menu - the three-dot menu.
-
-Measured facts that this module is built on:
-
-* The menu is a CHILD of the browser window, not a separate top-level window.
-  Older documentation claims otherwise; it is not true in current Chrome.
-* The accessibility tree tracks open and closed correctly - 0 menu items
-  before, 24 while open, 0 after Escape. That is what makes assertions about
-  menu contents meaningful: such a test can genuinely fail.
-* Item names embed their keyboard accelerator: 'New tab Ctrl+T',
-  'Delete browsing data... Ctrl+Shift+Del'. Exact matching on a plain label
-  would therefore never match, which is why `has_item` is prefix-based.
-"""
-
 from __future__ import annotations
 
+import logging
+import re
 from enum import StrEnum
 
-from chrome_window import UIA_TRANSIENT_ERRORS, ChromeWindow
+from chrome_window import UIA_TRANSIENT_ERRORS, ChromeWindow, UIAElement
 from waiting import wait_until
+
+logger = logging.getLogger(__name__)
+
+
+class UnknownMenuItem(LookupError):
+    pass
 
 
 class MenuItem(StrEnum):
-    """Entries of Chrome's application menu, by logical name."""
-
     NEW_TAB = "New tab"
     NEW_WINDOW = "New window"
     NEW_INCOGNITO_WINDOW = "New Incognito window"
@@ -44,8 +36,25 @@ class MenuItem(StrEnum):
     EXIT = "Exit"
 
 
+_MEMBER_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+def _as_label(value: str) -> str:
+    """Resolve a member, a member name or a literal into the displayed label."""
+    text = str(value)
+    try:
+        return str(MenuItem[text])
+    except KeyError:
+        pass
+    if _MEMBER_NAME.fullmatch(text):
+        known = ", ".join(sorted(member.name for member in MenuItem))
+        raise UnknownMenuItem(f"{text!r} is not a MenuItem name. Known names: {known}")
+    return text
+
+
 def _matches(item_name: str, label: str) -> bool:
     """Does a menu item named ``item_name`` mean ``label``, accelerator aside?"""
+    label = _as_label(label)
     if item_name == label:
         return True
     if item_name.startswith(label):
@@ -55,13 +64,11 @@ def _matches(item_name: str, label: str) -> bool:
 
 
 class AppMenu:
-    """The three-dot menu of one Chrome window."""
-
-    def __init__(self, window: ChromeWindow, timeout: float):
+    def __init__(self, window: ChromeWindow, timeout: float) -> None:
         self._window = window
         self._timeout = timeout
 
-    def _items(self) -> list:
+    def _items(self) -> list[UIAElement]:
         """Menu items currently in the tree; an empty list means closed."""
         try:
             return self._window.element.descendants(control_type="MenuItem")
@@ -90,10 +97,10 @@ class AppMenu:
     def open(self) -> AppMenu:
         """Open the menu and wait until it really is open; a no-op if open."""
         if self.is_open:
+            logger.debug("application menu is already open; not clicking again")
             return self
 
-        # Focus first. A click is delivered to a screen coordinate, so an
-        # overlapping window would swallow it silently - no error, no menu.
+        logger.info("opening the application menu")
         self._window.focus()
         self._window.app_menu_button(timeout=self._timeout).click_input()
 
@@ -103,13 +110,16 @@ class AppMenu:
             description="Chrome's application menu to open",
             ignore=UIA_TRANSIENT_ERRORS,
         )
+        logger.info("application menu open with %d item(s)", len(self._items()))
         return self
 
     def close(self) -> AppMenu:
         """Close the menu with Escape and wait until it really is closed."""
         if not self.is_open:
+            logger.debug("application menu is already closed")
             return self
 
+        logger.info("closing the application menu")
         self._window.focus()
         self._window.element.type_keys("{ESC}")
 
@@ -123,9 +133,10 @@ class AppMenu:
 
     def click_item(self, label: str) -> None:
         """Click a menu item by label, opening the menu first if needed."""
+        logger.info("clicking menu item %r (resolves to %r)", str(label), _as_label(label))
         self.open()
 
-        def matching_item():
+        def matching_item() -> UIAElement | None:
             for item in self._items():
                 try:
                     if _matches(item.element_info.name or "", label):

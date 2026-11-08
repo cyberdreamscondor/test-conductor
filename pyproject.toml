@@ -1,64 +1,26 @@
-# pyproject.toml is the single configuration file for a modern Python project:
-# packaging metadata, dependencies, and tool settings all live here.
-
-# --- How the package is built -------------------------------------------------
-# Any tool that installs this project reads this section first, installs the
-# listed build backend, and asks it to produce the package.
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# --- Project metadata ---------------------------------------------------------
 [project]
 name = "test-conductor"
 version = "0.1.0"
 description = "Cross-platform SDET automation framework"
 requires-python = ">=3.11"
 authors = [{ name = "David" }]
-# readme / license are added in Phase 12 together with the actual files.
 
-# Runtime dependencies: what a user of the framework needs.
-# Entries are added in the phase that first imports them, never speculatively.
-#
-# pywinauto drives the Windows UI Automation layer - Chrome's native menus,
-# toolbar and tab strip, which no browser-automation tool can reach. Verified
-# working on Python 3.14.7; see project docs/chrome-uia-findings.md.
-#
-# Test suites must NEVER depend on pywinauto directly. They depend on
-# test-conductor, which owns the driver. That is the whole point of the
-# framework: swapping the driver must not touch a single test.
-#
-# Still to come, each when the code that imports it is written:
-#   httpx      - API/GraphQL layer and the CDP client (Phase 2 item 4)
-#   websockets - CDP transport
-#   psycopg    - database layer (Phase 4)
 dependencies = [
     "pywinauto>=0.6.9",
-    # PyYAML parses the per-test config files. YAML rather than JSON because it
-    # takes comments, and a config a human edits needs to explain itself.
     "pyyaml>=6.0",
 ]
 
-# Optional dependency groups. Installed explicitly, e.g. pip install -e ".[dev]"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "ty>=0.0.99,<0.1",
 ]
 
-# --- Where the source lives ---------------------------------------------------
-# No package directory: the framework's modules sit directly at the repo root,
-# so there is no folder nested inside test-conductor/.
-#
-# Consequence to be aware of: each module becomes a TOP-LEVEL import name in the
-# installed environment - `import waiting`, not `import test_conductor.waiting`.
-# Top-level names are shared by everything installed in the venv, so module
-# names here must stay distinctive enough not to collide with another library.
-# Prefer chrome_desktop.py over desktop.py, browser_config.py over config.py.
-#
-# Every module must be listed below. Hatchling cannot guess which root-level
-# files are framework code and which are project scaffolding, so a new module
-# that is not added here simply will not be installed.
 [tool.hatch.build.targets.wheel]
 only-include = [
     "waiting.py",
@@ -69,48 +31,33 @@ only-include = [
     "chrome.py",
     "chrome_checks.py",
     "yaml_config.py",
+    "pytest_conductor.py",
 ]
 
-# --- pytest -------------------------------------------------------------------
+[project.entry-points.pytest11]
+test_conductor = "pytest_conductor"
+
 [tool.pytest.ini_options]
-# Where to look. Without this, a bare `pytest` crawls the whole tree and will
-# happily collect files from anywhere it finds them.
-#
-# This repository holds UNIT TESTS ONLY - tests of the framework's own internals,
-# pure and fast, launching no browser. Automated tests that drive a real Chrome
-# belong in the chrome-tests repository, never here.
 testpaths = ["unit-tests"]
 
-# -ra              print a summary of every non-passing result at the end, so
-#                  skips and expected failures are visible instead of silent.
-# --strict-markers an unknown @pytest.mark.foo becomes an error. Without it a
-#                  typo'd marker silently does nothing, and you believe a test
-#                  is being skipped or tagged when it is not.
-# --strict-config  an unknown key in this section is an error rather than being
-#                  ignored - same class of silent failure.
 addopts = "-ra --strict-markers --strict-config"
 
-# No markers are declared: every test here is a fast unit test, so there is
-# nothing to select between. --strict-markers means any marker used without
-# being declared above is an error, which is what stops a typo'd
-# @pytest.mark.integratoin from silently doing nothing.
+log_level = "DEBUG"
+log_cli = false
+log_format = "%(asctime)s %(levelname)-8s %(name)s %(message)s"
+log_date_format = "%H:%M:%S"
 
-# --- ruff: linter and formatter ----------------------------------------------
-# One tool replacing flake8 + isort + black. Fast, and configured in one place.
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-# Rule families, chosen as a practical starting set:
-#   E, W  pycodestyle  - style errors and warnings
-#   F     pyflakes     - real bugs: unused imports, undefined names
-#   I     isort        - import ordering
-#   UP    pyupgrade    - flags outdated syntax for the target Python version
-#   B     bugbear      - likely-wrong constructs (e.g. mutable default arguments)
-#   SIM   simplify     - needlessly convoluted code
-select = ["E", "W", "F", "I", "UP", "B", "SIM"]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "ANN"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"unit-tests/*" = ["ANN001", "ANN201", "ANN202", "ANN204"]
 
 [tool.ruff.format]
-# Double quotes, matching ruff's default and black's convention.
 quote-style = "double"
