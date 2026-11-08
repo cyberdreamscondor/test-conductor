@@ -5,6 +5,7 @@ import re
 from enum import StrEnum
 
 from chrome_window import UIA_TRANSIENT_ERRORS, ChromeWindow, UIAElement
+from reporting import step
 from waiting import wait_until
 
 logger = logging.getLogger(__name__)
@@ -100,17 +101,19 @@ class AppMenu:
             logger.debug("application menu is already open; not clicking again")
             return self
 
-        logger.info("opening the application menu")
-        self._window.focus()
-        self._window.app_menu_button(timeout=self._timeout).click_input()
+        with step("open the application menu"):
+            with step("focus the browser window and click the menu button"):
+                self._window.focus()
+                self._window.app_menu_button(timeout=self._timeout).click_input()
 
-        wait_until(
-            lambda: self.is_open,
-            timeout=self._timeout,
-            description="Chrome's application menu to open",
-            ignore=UIA_TRANSIENT_ERRORS,
-        )
-        logger.info("application menu open with %d item(s)", len(self._items()))
+            with step("wait for the menu items to appear"):
+                wait_until(
+                    lambda: self.is_open,
+                    timeout=self._timeout,
+                    description="Chrome's application menu to open",
+                    ignore=UIA_TRANSIENT_ERRORS,
+                )
+            logger.info("application menu open with %d item(s)", len(self._items()))
         return self
 
     def close(self) -> AppMenu:
@@ -119,36 +122,38 @@ class AppMenu:
             logger.debug("application menu is already closed")
             return self
 
-        logger.info("closing the application menu")
-        self._window.focus()
-        self._window.element.type_keys("{ESC}")
+        with step("close the application menu with Escape"):
+            self._window.focus()
+            self._window.element.type_keys("{ESC}")
 
-        wait_until(
-            lambda: not self.is_open,
-            timeout=self._timeout,
-            description="Chrome's application menu to close",
-            ignore=UIA_TRANSIENT_ERRORS,
-        )
+            wait_until(
+                lambda: not self.is_open,
+                timeout=self._timeout,
+                description="Chrome's application menu to close",
+                ignore=UIA_TRANSIENT_ERRORS,
+            )
         return self
 
     def click_item(self, label: str) -> None:
         """Click a menu item by label, opening the menu first if needed."""
-        logger.info("clicking menu item %r (resolves to %r)", str(label), _as_label(label))
-        self.open()
+        logger.debug("menu item %r resolves to %r", str(label), _as_label(label))
 
-        def matching_item() -> UIAElement | None:
-            for item in self._items():
-                try:
-                    if _matches(item.element_info.name or "", label):
-                        return item
-                except UIA_TRANSIENT_ERRORS:
-                    continue
-            return None
+        with step(f"click the menu item {_as_label(label)!r}"):
+            self.open()
 
-        item = wait_until(
-            matching_item,
-            timeout=self._timeout,
-            description=f"a menu item labelled {label!r}. Present: {self.item_names()}",
-            ignore=UIA_TRANSIENT_ERRORS,
-        )
-        item.click_input()
+            def matching_item() -> UIAElement | None:
+                for item in self._items():
+                    try:
+                        if _matches(item.element_info.name or "", label):
+                            return item
+                    except UIA_TRANSIENT_ERRORS:
+                        continue
+                return None
+
+            item = wait_until(
+                matching_item,
+                timeout=self._timeout,
+                description=f"a menu item labelled {label!r}. Present: {self.item_names()}",
+                ignore=UIA_TRANSIENT_ERRORS,
+            )
+            item.click_input()

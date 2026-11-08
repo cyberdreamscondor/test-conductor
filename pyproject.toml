@@ -15,10 +15,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+allure = [
+    "allure-pytest>=2.13",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
     "ty>=0.0.99,<0.1",
+    "allure-pytest>=2.13",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -31,6 +35,7 @@ only-include = [
     "chrome.py",
     "chrome_checks.py",
     "yaml_config.py",
+    "reporting.py",
     "pytest_conductor.py",
 ]
 

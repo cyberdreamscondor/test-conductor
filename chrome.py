@@ -7,6 +7,7 @@ from chrome_config import ChromeConfig
 from chrome_menu import AppMenu
 from chrome_process import ChromeProcess
 from chrome_window import ChromeWindow
+from reporting import step
 
 
 class Chrome:
@@ -24,12 +25,14 @@ class Chrome:
         elif overrides:
             config = config.with_changes(**overrides)
 
-        process = ChromeProcess.launch(config)
-        try:
-            window = ChromeWindow.attach(process.pid, timeout=config.launch_timeout)
-        except BaseException:
-            process.terminate()
-            raise
+        with step("launch Chrome"):
+            process = ChromeProcess.launch(config)
+            try:
+                with step("attach to the Chrome window"):
+                    window = ChromeWindow.attach(process.pid, timeout=config.launch_timeout)
+            except BaseException:
+                process.terminate()
+                raise
 
         return cls(process, window, config)
 
@@ -60,7 +63,8 @@ class Chrome:
 
     def close(self) -> None:
         """Stop the browser and delete its profile. Safe to call twice."""
-        self._process.terminate()
+        with step("close Chrome"):
+            self._process.terminate()
 
     def __enter__(self) -> Chrome:
         return self

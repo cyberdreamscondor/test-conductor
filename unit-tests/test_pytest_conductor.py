@@ -1,6 +1,12 @@
+import json
+
 import pytest
 
 from pytest_conductor import (
+    ALLURE_HISTORY_DIR_NAME,
+    ALLURE_REPORT_DIR_NAME,
+    ALLURE_RESULTS_DIR_NAME,
+    CATEGORIES_FILE_NAME,
     DEFAULT_OUTPUT_DIR_NAME,
     LOG_FILE_NAME,
     OUTPUT_DIR_ENV_VAR,
@@ -104,10 +110,13 @@ def test_a_test_outside_the_rootdir_does_not_raise(tmp_path):
     assert path == tmp_path / "out" / "test_wandering"
 
 
+NO_ALLURE_INI = "[pytest]\naddopts = --no-allure\n"
+
+
 @pytest.fixture
 def suite(pytester):
     """A throwaway suite with one test that writes into its output directory."""
-    pytester.makefile(".ini", pytest="[pytest]\n")
+    pytester.makefile(".ini", pytest=NO_ALLURE_INI)
     pytester.makepyfile(
         **{
             "tests/menus/test_thing": (
@@ -162,7 +171,7 @@ def test_the_default_is_under_the_rootdir(suite, monkeypatch):
 def test_no_directory_is_created_for_a_test_that_does_not_ask(pytester, monkeypatch):
     """Creation is lazy, or most tests would leave an empty directory."""
     monkeypatch.delenv(OUTPUT_DIR_ENV_VAR, raising=False)
-    pytester.makefile(".ini", pytest="[pytest]\n")
+    pytester.makefile(".ini", pytest=NO_ALLURE_INI)
     pytester.makepyfile(**{"tests/test_quiet": "def test_quiet():\n    assert True\n"})
 
     result = pytester.runpytest()
@@ -182,7 +191,7 @@ def test_the_run_header_says_where_artifacts_go(suite):
 def noisy_suite(pytester, monkeypatch):
     """One passing and one failing test, both of which print."""
     monkeypatch.delenv(OUTPUT_DIR_ENV_VAR, raising=False)
-    pytester.makefile(".ini", pytest="[pytest]\n")
+    pytester.makefile(".ini", pytest=NO_ALLURE_INI)
     pytester.makepyfile(
         **{
             "tests/test_good": "def test_good():\n    print('good ran')\n    assert True\n",
@@ -260,7 +269,7 @@ def test_save_log_never_writes_nothing_at_all(noisy_suite):
 def test_the_log_lands_beside_the_fixture_artifacts(pytester, monkeypatch):
     """The log and the test's own files must share one directory."""
     monkeypatch.delenv(OUTPUT_DIR_ENV_VAR, raising=False)
-    pytester.makefile(".ini", pytest="[pytest]\n")
+    pytester.makefile(".ini", pytest=NO_ALLURE_INI)
     pytester.makepyfile(
         **{
             "tests/menus/test_both": (
@@ -276,3 +285,89 @@ def test_the_log_lands_beside_the_fixture_artifacts(pytester, monkeypatch):
     directory = pytester.path / DEFAULT_OUTPUT_DIR_NAME / "menus" / "test_both"
     assert (directory / "extra.txt").exists()
     assert (directory / LOG_FILE_NAME).exists()
+
+
+def _results(pytester, *parts: str):
+    return pytester.path.joinpath(*parts)
+
+
+@pytest.fixture
+def allure_suite(pytester, monkeypatch):
+    """The same throwaway suite with Allure on; always run in a subprocess."""
+    monkeypatch.delenv(OUTPUT_DIR_ENV_VAR, raising=False)
+    pytester.makefile(".ini", pytest="[pytest]\n")
+    pytester.makepyfile(**{"tests/menus/test_thing": "def test_thing():\n    assert True\n"})
+    return pytester
+
+
+def test_allure_results_appear_without_anyone_asking_for_them(allure_suite):
+    """Installing allure-pytest is the whole opt-in; no option to remember."""
+    allure_suite.runpytest_subprocess("--output-dir=artifacts")
+
+    results = _results(allure_suite, "artifacts", ALLURE_RESULTS_DIR_NAME)
+    assert list(results.glob("*-result.json")), f"no Allure results in {results}"
+
+
+def test_an_explicit_alluredir_wins(allure_suite):
+    """The default must not override a deliberate choice."""
+    allure_suite.runpytest_subprocess("--output-dir=artifacts", "--alluredir=elsewhere")
+
+    assert list(_results(allure_suite, "elsewhere").glob("*-result.json"))
+    assert not _results(allure_suite, "artifacts", ALLURE_RESULTS_DIR_NAME).exists()
+
+
+def test_no_allure_switches_it_off(allure_suite):
+    """An escape hatch that does not require uninstalling a dependency."""
+    allure_suite.runpytest_subprocess("--output-dir=artifacts", "--no-allure")
+
+    assert not _results(allure_suite, "artifacts", ALLURE_RESULTS_DIR_NAME).exists()
+
+
+def test_the_header_says_where_the_results_went(allure_suite):
+    result = allure_suite.runpytest_subprocess("--output-dir=artifacts")
+
+    result.stdout.fnmatch_lines(["*allure-results:*artifacts*"])
+
+
+def test_the_failure_categories_are_written_for_the_report(allure_suite):
+    """The file must survive --clean-alluredir, which empties the directory."""
+    allure_suite.runpytest_subprocess("--output-dir=artifacts", "--clean-alluredir")
+
+    categories = _results(allure_suite, "artifacts", ALLURE_RESULTS_DIR_NAME, CATEGORIES_FILE_NAME)
+    names = [entry["name"] for entry in json.loads(categories.read_text(encoding="utf-8"))]
+    assert "The UI never became ready" in names
+
+
+def test_the_previous_reports_history_is_carried_into_the_results(allure_suite):
+    """Trends exist only if the last report's history is fed back in."""
+    history = _results(allure_suite, "artifacts", ALLURE_REPORT_DIR_NAME, ALLURE_HISTORY_DIR_NAME)
+    history.mkdir(parents=True)
+    (history / "history.json").write_text('{"from": "the previous run"}', encoding="utf-8")
+
+    allure_suite.runpytest_subprocess("--output-dir=artifacts")
+
+    carried = _results(
+        allure_suite,
+        "artifacts",
+        ALLURE_RESULTS_DIR_NAME,
+        ALLURE_HISTORY_DIR_NAME,
+        "history.json",
+    )
+    assert "previous run" in carried.read_text(encoding="utf-8")
+
+
+def test_a_first_run_without_a_previous_report_is_fine(allure_suite):
+    """The common case, and it must not error: there is no history to carry."""
+    result = allure_suite.runpytest_subprocess("--output-dir=artifacts")
+
+    result.assert_outcomes(passed=1)
+    assert not _results(
+        allure_suite, "artifacts", ALLURE_RESULTS_DIR_NAME, ALLURE_HISTORY_DIR_NAME
+    ).exists()
+
+
+def test_the_summary_prints_the_commands_that_build_the_report(allure_suite):
+    """A results directory is JSON for a generator, and says so nowhere."""
+    result = allure_suite.runpytest_subprocess("--output-dir=artifacts")
+
+    result.stdout.fnmatch_lines(["*allure generate*artifacts*", "*allure open*"])

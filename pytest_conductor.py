@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import importlib.util
+import json
 import os
 import re
+import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,6 +16,44 @@ TESTS_DIR_NAME = "tests"
 
 LOG_FILE_NAME = "test-log.txt"
 SAVE_LOG_CHOICES = ("failed", "always", "never")
+
+ALLURE_RESULTS_DIR_NAME = "allure-results"
+ALLURE_REPORT_DIR_NAME = "allure-report"
+ALLURE_HISTORY_DIR_NAME = "history"
+CATEGORIES_FILE_NAME = "categories.json"
+
+FAILURE_CATEGORIES = [
+    {
+        "name": "Chrome could not be launched",
+        "matchedStatuses": ["failed", "broken"],
+        "traceRegex": "(?s).*ChromeNotFoundError.*",
+    },
+    {
+        "name": "The UI never became ready",
+        "matchedStatuses": ["failed", "broken"],
+        "traceRegex": "(?s).*WaitTimeout.*",
+    },
+    {
+        "name": "UI automation error",
+        "matchedStatuses": ["failed", "broken"],
+        "traceRegex": "(?s).*(COMError|ElementNotFoundError|ElementAmbiguousError).*",
+    },
+    {
+        "name": "Test data or config problem",
+        "matchedStatuses": ["failed", "broken"],
+        "traceRegex": "(?s).*(UnknownMenuItem|MissingConfigValue|MissingConfigAttribute).*",
+    },
+    {
+        "name": "Profile isolation broken",
+        "matchedStatuses": ["failed"],
+        "messageRegex": "(?s).*framework-managed.*",
+    },
+    {
+        "name": "Expected menu entry missing",
+        "matchedStatuses": ["failed"],
+        "messageRegex": "(?s).*not found. Present:.*",
+    },
+]
 
 _ILLEGAL_IN_SEGMENT = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -90,6 +132,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default="",
     )
     group.addoption(
+        "--no-allure",
+        dest="no_allure",
+        action="store_true",
+        default=False,
+        help=(
+            "Do not point allure-pytest at the artifact directory. Allure "
+            "results are written automatically whenever allure-pytest is "
+            "installed; this switches that off without uninstalling it."
+        ),
+    )
+    group.addoption(
         "--save-log",
         dest="save_log",
         choices=SAVE_LOG_CHOICES,
@@ -103,14 +156,79 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+def _allure_is_installed() -> bool:
+    """Is allure-pytest importable? Checked without importing it."""
+    return importlib.util.find_spec("allure_pytest") is not None
+
+
+def allure_results_dir(config: pytest.Config) -> Path | None:
+    """Where this run's Allure results belong, or None when Allure is off."""
+    if not _allure_is_installed() or config.getoption("no_allure", default=False):
+        return None
+
+    chosen = getattr(config.option, "allure_report_dir", None)
+    if chosen:
+        return Path(chosen).expanduser().resolve()
+    return _resolve_output_root(config) / ALLURE_RESULTS_DIR_NAME
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     """Register the log writer and point Allure at the artifact directory."""
     config.pluginmanager.register(_TestLogWriter(config), "test-conductor-log-writer")
 
+    results = allure_results_dir(config)
+    if results is not None:
+        config.option.allure_report_dir = str(results)
 
-def pytest_report_header(config: pytest.Config) -> str:
+
+def allure_report_dir(config: pytest.Config) -> Path:
+    """Where `allure generate` is expected to put the HTML report."""
+    return _resolve_output_root(config) / ALLURE_REPORT_DIR_NAME
+
+
+def _carry_history_forward(results: Path, report: Path) -> None:
+    """Copy the previous report's history in, which is what makes trends work."""
+    source = report / ALLURE_HISTORY_DIR_NAME
+    if not source.is_dir():
+        return
+
+    shutil.copytree(source, results / ALLURE_HISTORY_DIR_NAME, dirs_exist_ok=True)
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """Write the failure categories beside the results, after any cleaning."""
+    results = allure_results_dir(session.config)
+    if results is None:
+        return
+
+    results.mkdir(parents=True, exist_ok=True)
+    (results / CATEGORIES_FILE_NAME).write_text(
+        json.dumps(FAILURE_CATEGORIES, indent=2), encoding="utf-8"
+    )
+    _carry_history_forward(results, allure_report_dir(session.config))
+
+
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pytest.Config) -> None:
+    """Print the two commands that turn the results into a report."""
+    results = allure_results_dir(config)
+    if results is None or not any(results.glob("*-result.json")):
+        return
+
+    report = allure_report_dir(config)
+    terminalreporter.write_sep("-", "Allure")
+    terminalreporter.write_line(f'allure generate "{results}" --clean -o "{report}"')
+    terminalreporter.write_line(f'allure open "{report}"')
+
+
+def pytest_report_header(config: pytest.Config) -> list[str]:
     """Print the artifact locations in the run header."""
-    return f"output-dir: {_resolve_output_root(config)}"
+    lines = [f"output-dir: {_resolve_output_root(config)}"]
+
+    results = allure_results_dir(config)
+    if results is not None:
+        lines.append(f"allure-results: {results}")
+    return lines
 
 
 def _part(title: str, text: str | None) -> str:
