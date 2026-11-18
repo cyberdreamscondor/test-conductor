@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,11 @@ ALLURE_RESULTS_DIR_NAME = "allure-results"
 ALLURE_REPORT_DIR_NAME = "allure-report"
 ALLURE_HISTORY_DIR_NAME = "history"
 CATEGORIES_FILE_NAME = "categories.json"
+
+OPEN_REPORT_CHOICES = ("auto", "always", "never")
+CI_ENV_VAR = "CI"
+
+INTERACTIVE_RUN = pytest.StashKey[bool]()
 
 FAILURE_CATEGORIES = [
     {
@@ -143,6 +149,30 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         ),
     )
     group.addoption(
+        "--keep-results",
+        dest="keep_results",
+        action="store_true",
+        default=False,
+        help=(
+            "Keep the Allure results of earlier runs instead of replacing them. "
+            "One results directory describes one run; mixing runs makes the "
+            "report show tests that no longer exist. Trend history lives in the "
+            "generated report and is never touched by this."
+        ),
+    )
+    group.addoption(
+        "--open-report",
+        dest="open_report",
+        choices=OPEN_REPORT_CHOICES,
+        default="auto",
+        help=(
+            "Build and open the Allure report when the run ends. 'auto' (the "
+            f"default) only in an interactive terminal with ${CI_ENV_VAR} unset, "
+            "'always' regardless, 'never' to switch it off. A filtered run is "
+            "served from a throwaway report so it leaves the trend alone."
+        ),
+    )
+    group.addoption(
         "--save-log",
         dest="save_log",
         choices=SAVE_LOG_CHOICES,
@@ -180,6 +210,8 @@ def pytest_configure(config: pytest.Config) -> None:
     results = allure_results_dir(config)
     if results is not None:
         config.option.allure_report_dir = str(results)
+        if not config.getoption("keep_results", default=False):
+            shutil.rmtree(results, ignore_errors=True)
 
 
 def allure_report_dir(config: pytest.Config) -> Path:
@@ -211,6 +243,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
 def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pytest.Config) -> None:
     """Print the two commands that turn the results into a report."""
+    config.stash[INTERACTIVE_RUN] = bool(terminalreporter.hasmarkup)
+
     results = allure_results_dir(config)
     if results is None or not any(results.glob("*-result.json")):
         return
@@ -219,6 +253,61 @@ def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pyte
     terminalreporter.write_sep("-", "Allure")
     terminalreporter.write_line(f'allure generate "{results}" --clean -o "{report}"')
     terminalreporter.write_line(f'allure open "{report}"')
+
+
+def _allure_cli() -> str | None:
+    """The Allure command-line program, when it is on PATH."""
+    return shutil.which("allure")
+
+
+def run_covers_whole_suite(config: pytest.Config) -> bool:
+    """No paths and no -k/-m filter, so the run is worth a trend point."""
+    if config.getoption("keyword", default="") or config.getoption("markexpr", default=""):
+        return False
+    return not getattr(config.option, "file_or_dir", [])
+
+
+def report_commands(allure: str, results: Path, report: Path, whole_suite: bool) -> list[list[str]]:
+    """The Allure commands that open this run's results in a browser."""
+    if not whole_suite:
+        return [[allure, "serve", str(results)]]
+
+    return [
+        [allure, "generate", str(results), "--clean", "-o", str(report)],
+        [allure, "open", str(report)],
+    ]
+
+
+def should_open_report(config: pytest.Config) -> bool:
+    """Does this run end in a browser? 'auto' means interactive runs only."""
+    choice = str(config.getoption("open_report", default="auto"))
+    if choice == "never":
+        return False
+    if choice == "always":
+        return True
+    if os.environ.get(CI_ENV_VAR):
+        return False
+    return config.stash.get(INTERACTIVE_RUN, False)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Open the Allure report once pytest has printed everything else."""
+    results = allure_results_dir(config)
+    if results is None or not should_open_report(config):
+        return
+    if not any(results.glob("*-result.json")):
+        return
+
+    allure = _allure_cli()
+    if allure is None:
+        print(f"allure is not on PATH, so no report was opened. Results: {results}")
+        return
+
+    for command in report_commands(
+        allure, results, allure_report_dir(config), run_covers_whole_suite(config)
+    ):
+        subprocess.run(command, check=False)
 
 
 def pytest_report_header(config: pytest.Config) -> list[str]:

@@ -7,10 +7,15 @@ from pytest_conductor import (
     ALLURE_REPORT_DIR_NAME,
     ALLURE_RESULTS_DIR_NAME,
     CATEGORIES_FILE_NAME,
+    CI_ENV_VAR,
     DEFAULT_OUTPUT_DIR_NAME,
+    INTERACTIVE_RUN,
     LOG_FILE_NAME,
     OUTPUT_DIR_ENV_VAR,
     output_path_for,
+    report_commands,
+    run_covers_whole_suite,
+    should_open_report,
 )
 
 
@@ -295,7 +300,7 @@ def _results(pytester, *parts: str):
 def allure_suite(pytester, monkeypatch):
     """The same throwaway suite with Allure on; always run in a subprocess."""
     monkeypatch.delenv(OUTPUT_DIR_ENV_VAR, raising=False)
-    pytester.makefile(".ini", pytest="[pytest]\n")
+    pytester.makefile(".ini", pytest="[pytest]\naddopts = --open-report=never\n")
     pytester.makepyfile(**{"tests/menus/test_thing": "def test_thing():\n    assert True\n"})
     return pytester
 
@@ -371,3 +376,101 @@ def test_the_summary_prints_the_commands_that_build_the_report(allure_suite):
     result = allure_suite.runpytest_subprocess("--output-dir=artifacts")
 
     result.stdout.fnmatch_lines(["*allure generate*artifacts*", "*allure open*"])
+
+
+def _result_names(pytester):
+    directory = _results(pytester, "artifacts", ALLURE_RESULTS_DIR_NAME)
+    return {path.name for path in directory.glob("*-result.json")}
+
+
+def test_each_run_replaces_the_results_of_the_previous_one(allure_suite):
+    """Mixing runs makes the report show tests that no longer exist."""
+    allure_suite.runpytest_subprocess("--output-dir=artifacts")
+    first = _result_names(allure_suite)
+
+    allure_suite.runpytest_subprocess("--output-dir=artifacts")
+    second = _result_names(allure_suite)
+
+    assert len(first) == len(second) == 1
+    assert not first & second
+
+
+def test_keep_results_accumulates_runs_on_purpose(allure_suite):
+    """The escape hatch for assembling one report out of several runs."""
+    allure_suite.runpytest_subprocess("--output-dir=artifacts")
+    allure_suite.runpytest_subprocess("--output-dir=artifacts", "--keep-results")
+
+    assert len(_result_names(allure_suite)) == 2
+
+
+def test_cleaning_the_results_leaves_the_report_history_alone(allure_suite):
+    """History is the one thing that must survive run after run."""
+    history = _results(allure_suite, "artifacts", ALLURE_REPORT_DIR_NAME, ALLURE_HISTORY_DIR_NAME)
+    history.mkdir(parents=True)
+    (history / "history.json").write_text('{"from": "the previous run"}', encoding="utf-8")
+
+    allure_suite.runpytest_subprocess("--output-dir=artifacts")
+    allure_suite.runpytest_subprocess("--output-dir=artifacts")
+
+    assert "previous run" in (history / "history.json").read_text(encoding="utf-8")
+
+
+def test_a_plain_run_is_the_whole_suite(pytester):
+    """Only such a run earns a point on the trend chart."""
+    assert run_covers_whole_suite(pytester.parseconfig())
+
+
+@pytest.mark.parametrize("narrowing", [("-k", "menu"), ("-m", "slow"), ("test_thing.py",)])
+def test_filters_and_paths_make_a_run_partial(pytester, narrowing):
+    """A subset of the suite must not be compared against full runs."""
+    assert not run_covers_whole_suite(pytester.parseconfig(*narrowing))
+
+
+def test_a_whole_suite_run_generates_a_report_it_keeps(tmp_path):
+    """Generating into a fixed directory is what carries history forward."""
+    commands = report_commands("allure", tmp_path / "in", tmp_path / "out", whole_suite=True)
+
+    assert [command[1] for command in commands] == ["generate", "open"]
+    assert str(tmp_path / "out") in commands[0]
+
+
+def test_a_partial_run_is_served_and_leaves_no_report(tmp_path):
+    """allure serve uses a temporary directory, so no trend point appears."""
+    commands = report_commands("allure", tmp_path / "in", tmp_path / "out", whole_suite=False)
+
+    assert commands == [["allure", "serve", str(tmp_path / "in")]]
+
+
+def test_never_and_always_override_everything(pytester, monkeypatch):
+    """The two switches a person reaches for must not be second-guessed."""
+    monkeypatch.setenv(CI_ENV_VAR, "true")
+
+    assert not should_open_report(pytester.parseconfig("--open-report=never"))
+    assert should_open_report(pytester.parseconfig("--open-report=always"))
+
+
+def test_auto_opens_nothing_in_ci(pytester, monkeypatch):
+    """A blocking web server would hang the job until it timed out."""
+    monkeypatch.setenv(CI_ENV_VAR, "true")
+    config = pytester.parseconfig()
+    config.stash[INTERACTIVE_RUN] = True
+
+    assert not should_open_report(config)
+
+
+def test_auto_opens_the_report_for_an_interactive_run(pytester, monkeypatch):
+    """The case the default exists for: a person running tests by hand."""
+    monkeypatch.delenv(CI_ENV_VAR, raising=False)
+    config = pytester.parseconfig()
+    config.stash[INTERACTIVE_RUN] = True
+
+    assert should_open_report(config)
+
+
+def test_auto_stays_quiet_when_the_output_is_not_a_terminal(pytester, monkeypatch):
+    """Editors, hooks and pipes read pytest output; nobody watches a browser."""
+    monkeypatch.delenv(CI_ENV_VAR, raising=False)
+    config = pytester.parseconfig()
+    config.stash[INTERACTIVE_RUN] = False
+
+    assert not should_open_report(config)
