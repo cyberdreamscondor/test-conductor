@@ -12,6 +12,7 @@ authors = [{ name = "David" }]
 dependencies = [
     "pywinauto>=0.6.9",
     "pyyaml>=6.0",
+    "websocket-client>=1.8",
 ]
 
 [project.optional-dependencies]

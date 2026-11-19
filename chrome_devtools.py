@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import websocket
+
 from reporting import step
 from waiting import WaitTimeout, wait_until
 
@@ -16,8 +18,29 @@ logger = logging.getLogger(__name__)
 PORT_FILE_NAME = "DevToolsActivePort"
 PAGE_TARGET_TYPE = "page"
 
+PAGE_TEXT_SCRIPT = """
+(() => {
+  const parts = [];
+  const walk = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent.trim();
+      if (text) parts.push(text);
+      return;
+    }
+    if (node.shadowRoot) walk(node.shadowRoot);
+    for (const child of node.childNodes) walk(child);
+  };
+  walk(document.body);
+  return parts.join("\\n");
+})()
+"""
+
 
 class DevToolsUnavailable(RuntimeError):
+    pass
+
+
+class CdpError(RuntimeError):
     pass
 
 
@@ -115,3 +138,84 @@ class DevTools:
             if target.url.startswith(url_prefix):
                 return target
         return None
+
+
+class CdpSession:
+    """One WebSocket conversation with a page, where commands carry an id."""
+
+    def __init__(self, socket: Any, timeout: float = 10.0) -> None:
+        self._socket = socket
+        self._timeout = timeout
+        self._last_id = 0
+
+    @classmethod
+    def connect(cls, websocket_url: str, *, timeout: float = 10.0) -> CdpSession:
+        """Open the socket a page target advertises."""
+        logger.debug("opening a devtools session on %s", websocket_url)
+        return cls(websocket.create_connection(websocket_url, timeout=timeout), timeout)
+
+    def call(self, method: str, **params: Any) -> dict[str, Any]:
+        """Send one command and wait for the reply carrying the same id."""
+        self._last_id += 1
+        message_id = self._last_id
+        self._socket.send(json.dumps({"id": message_id, "method": method, "params": params}))
+
+        while True:
+            message = json.loads(self._socket.recv())
+            if message.get("id") != message_id:
+                continue
+            if "error" in message:
+                raise CdpError(f"{method} failed: {message['error']}")
+            return message.get("result", {})
+
+    def close(self) -> None:
+        """Hang up. Safe when the browser has already gone away."""
+        with contextlib.suppress(OSError, websocket.WebSocketException):
+            self._socket.close()
+
+
+class Page:
+    """A live page. UIA sees one opaque node here; this sees the content."""
+
+    def __init__(self, target: PageTarget, session: CdpSession, timeout: float = 10.0) -> None:
+        self._target = target
+        self._session = session
+        self._timeout = timeout
+
+    @classmethod
+    def attach(cls, target: PageTarget, *, timeout: float = 10.0) -> Page:
+        """Open a session with ``target`` and speak to it."""
+        return cls(target, CdpSession.connect(target.websocket_url, timeout=timeout), timeout)
+
+    @property
+    def url(self) -> str:
+        """Where the page is now, which the discovery listing may predate."""
+        return str(self._evaluate("location.href") or "")
+
+    @property
+    def title(self) -> str:
+        """The page title, read from the document rather than the window."""
+        return str(self._evaluate("document.title") or "")
+
+    def text(self) -> str:
+        """All text, including what Chrome's own pages hide in shadow roots."""
+        return str(self._evaluate(PAGE_TEXT_SCRIPT) or "")
+
+    def contains(self, fragment: str, *, timeout: float | None = None) -> bool:
+        """Wait for ``fragment`` to show up in the page text."""
+        with contextlib.suppress(WaitTimeout):
+            wait_until(
+                lambda: fragment in self.text() or None,
+                timeout=self._timeout if timeout is None else timeout,
+                description=f"the page to show {fragment!r}",
+            )
+            return True
+        return False
+
+    def close(self) -> None:
+        """Close the session, not the tab."""
+        self._session.close()
+
+    def _evaluate(self, expression: str) -> Any:
+        result = self._session.call("Runtime.evaluate", expression=expression, returnByValue=True)
+        return result.get("result", {}).get("value")

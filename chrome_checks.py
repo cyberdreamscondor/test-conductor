@@ -35,6 +35,12 @@ class Page(Protocol):
     def title(self) -> str: ...
 
 
+class PageContent(Page, Protocol):
+    def text(self) -> str: ...
+
+    def contains(self, fragment: str, *, timeout: float | None = None) -> bool: ...
+
+
 class Pages(Protocol):
     def pages(self) -> list[Page]: ...
 
@@ -104,3 +110,18 @@ def check_page_open(devtools: Pages, url_prefix: str, *, timeout: float | None =
         addresses = [page.url for page in devtools.pages()]
         attach_text("open pages", "\n".join(addresses) or "(the browser has no pages open)")
         assert found is not None, f"no page at {url_prefix!r} is open. Open pages: {addresses}"
+
+
+def check_page_title(page: Page, expected: str) -> None:
+    """The page's own title, which is not the window title."""
+    with step(f"check the page title is {expected!r}"):
+        title = page.title
+        assert title == expected, f"page title is {title!r}, expected {expected!r}"
+
+
+def check_page_shows(page: PageContent, fragment: str, *, timeout: float | None = None) -> None:
+    """The page shows ``fragment`` somewhere in its text."""
+    with step(f"check the page shows {fragment!r}"):
+        found = page.contains(fragment, timeout=timeout)
+        attach_text("page text", page.text() or "(the page showed no text)")
+        assert found, f"the page at {page.url} does not show {fragment!r}"

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from chrome_config import ChromeConfig
-from chrome_devtools import DevTools, DevToolsUnavailable
+from chrome_devtools import DevTools, DevToolsUnavailable, Page
 from chrome_menu import AppMenu
 from chrome_process import ChromeProcess
 from chrome_window import ChromeWindow
@@ -18,6 +18,7 @@ class Chrome:
         self._config = config
         self._menu = AppMenu(window, timeout=config.ui_timeout)
         self._devtools: DevTools | None = None
+        self._pages: list[Page] = []
 
     @classmethod
     def launch(cls, config: ChromeConfig | None = None, **overrides: Any) -> Chrome:
@@ -63,6 +64,14 @@ class Chrome:
                 )
         return self._devtools
 
+    def page(self, url_prefix: str = "", *, timeout: float | None = None) -> Page:
+        """Wait for the page at ``url_prefix`` and open a session with it."""
+        target = self.devtools.page(url_prefix, timeout=timeout)
+        with step(f"attach to the page at {target.url}"):
+            page = Page.attach(target, timeout=self._config.ui_timeout)
+        self._pages.append(page)
+        return page
+
     @property
     def title(self) -> str:
         """The window title, e.g. 'about:blank - Google Chrome'."""
@@ -81,6 +90,9 @@ class Chrome:
     def close(self) -> None:
         """Stop the browser and delete its profile. Safe to call twice."""
         with step("close Chrome"):
+            for page in self._pages:
+                page.close()
+            self._pages.clear()
             self._process.terminate()
 
     def __enter__(self) -> Chrome:
