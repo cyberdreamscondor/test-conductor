@@ -29,5 +29,5 @@ repos:
         language: system
         entry: pytest -q --open-report=never
         pass_filenames: false
-        types: [python]
+        always_run: true
         stages: [pre-push]
