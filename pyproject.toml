@@ -23,6 +23,7 @@ dev = [
     "ruff>=0.6",
     "ty>=0.0.99,<0.1",
     "allure-pytest>=2.13",
+    "pre-commit>=4.0",
 ]
 
 [tool.hatch.build.targets.wheel]
