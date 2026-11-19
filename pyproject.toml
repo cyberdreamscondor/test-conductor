@@ -33,6 +33,7 @@ only-include = [
     "chrome_process.py",
     "chrome_window.py",
     "chrome_menu.py",
+    "chrome_devtools.py",
     "chrome.py",
     "chrome_checks.py",
     "yaml_config.py",

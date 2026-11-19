@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from chrome_config import ChromeConfig
+from chrome_devtools import DevTools, DevToolsUnavailable
 from chrome_menu import AppMenu
 from chrome_process import ChromeProcess
 from chrome_window import ChromeWindow
@@ -16,6 +17,7 @@ class Chrome:
         self._window = window
         self._config = config
         self._menu = AppMenu(window, timeout=config.ui_timeout)
+        self._devtools: DevTools | None = None
 
     @classmethod
     def launch(cls, config: ChromeConfig | None = None, **overrides: Any) -> Chrome:
@@ -45,6 +47,21 @@ class Chrome:
     def menu(self) -> AppMenu:
         """The native three-dot application menu."""
         return self._menu
+
+    @property
+    def devtools(self) -> DevTools:
+        """The DevTools endpoint, which sees inside tabs. UIA cannot."""
+        if self._devtools is None:
+            if self._config.remote_debugging_port is None:
+                raise DevToolsUnavailable(
+                    "This Chrome was launched without a remote debugging port. "
+                    "Launch it with remote_debugging_port=0 to use DevTools."
+                )
+            with step("attach to the DevTools endpoint"):
+                self._devtools = DevTools.attach(
+                    self._process.profile_directory, timeout=self._config.launch_timeout
+                )
+        return self._devtools
 
     @property
     def title(self) -> str:

@@ -27,6 +27,20 @@ class Menu(Protocol):
     def has_item(self, label: str) -> bool: ...
 
 
+class Page(Protocol):
+    @property
+    def url(self) -> str: ...
+
+    @property
+    def title(self) -> str: ...
+
+
+class Pages(Protocol):
+    def pages(self) -> list[Page]: ...
+
+    def find_page(self, url_prefix: str = "", *, timeout: float | None = None) -> Page | None: ...
+
+
 def check_browser_running(chrome: Browser) -> None:
     """The browser process is alive."""
     with step("check the browser process is running"):
@@ -81,3 +95,12 @@ def check_menu_has_items(menu: Menu, labels: Iterable[str]) -> None:
         missing = [str(label) for label in labels if not menu.has_item(label)]
         attach_text("menu items present", "\n".join(present) or "(the menu showed no items)")
         assert not missing, f"menu items {missing} not found. Present: {present}"
+
+
+def check_page_open(devtools: Pages, url_prefix: str, *, timeout: float | None = None) -> None:
+    """A page whose address starts with ``url_prefix`` is open."""
+    with step(f"check a page at {url_prefix} is open"):
+        found = devtools.find_page(url_prefix, timeout=timeout)
+        addresses = [page.url for page in devtools.pages()]
+        attach_text("open pages", "\n".join(addresses) or "(the browser has no pages open)")
+        assert found is not None, f"no page at {url_prefix!r} is open. Open pages: {addresses}"
