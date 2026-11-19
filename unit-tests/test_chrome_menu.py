@@ -1,6 +1,43 @@
 import pytest
+from pywinauto.uia_defines import NoPatternInterfaceError
 
-from chrome_menu import MenuItem, UnknownMenuItem, _matches
+from chrome_menu import MenuItem, UnknownMenuItem, _matches, activate
+
+
+class FakeItem:
+    """A menu item that records how it was asked to act."""
+
+    def __init__(self, invoke_error=None):
+        self.invoked = False
+        self.clicked = False
+        self._invoke_error = invoke_error
+
+    def invoke(self):
+        if self._invoke_error is not None:
+            raise self._invoke_error
+        self.invoked = True
+
+    def click_input(self):
+        self.clicked = True
+
+
+def test_a_menu_item_is_invoked_rather_than_clicked():
+    """Settings sits at y=1077; a 1024x768 desktop has nothing to click."""
+    item = FakeItem()
+
+    activate(item)
+
+    assert item.invoked
+    assert not item.clicked
+
+
+def test_an_item_without_the_invoke_pattern_is_clicked():
+    """Not every control implements Invoke, and a click still works locally."""
+    item = FakeItem(invoke_error=NoPatternInterfaceError())
+
+    activate(item)
+
+    assert item.clicked
 
 
 def test_a_member_matches_its_label():

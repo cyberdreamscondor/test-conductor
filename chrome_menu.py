@@ -4,6 +4,8 @@ import logging
 import re
 from enum import StrEnum
 
+from pywinauto.uia_defines import NoPatternInterfaceError
+
 from chrome_window import UIA_TRANSIENT_ERRORS, ChromeWindow, UIAElement
 from reporting import step
 from waiting import wait_until
@@ -13,6 +15,15 @@ logger = logging.getLogger(__name__)
 
 class UnknownMenuItem(LookupError):
     pass
+
+
+def activate(item: UIAElement) -> None:
+    """Ask the item to act. Clicking its coordinates is the fallback."""
+    try:
+        item.invoke()
+    except NoPatternInterfaceError:
+        logger.warning("menu item has no Invoke pattern; falling back to a click")
+        item.click_input()
 
 
 class MenuItem(StrEnum):
@@ -138,7 +149,7 @@ class AppMenu:
         """Click a menu item by label, opening the menu first if needed."""
         logger.debug("menu item %r resolves to %r", str(label), _as_label(label))
 
-        with step(f"click the menu item {_as_label(label)!r}"):
+        with step(f"choose the menu item {_as_label(label)!r}"):
             self.open()
 
             def matching_item() -> UIAElement | None:
@@ -156,4 +167,4 @@ class AppMenu:
                 description=f"a menu item labelled {label!r}. Present: {self.item_names()}",
                 ignore=UIA_TRANSIENT_ERRORS,
             )
-            item.click_input()
+            activate(item)
